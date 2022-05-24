@@ -15,8 +15,9 @@ import random
 epsilon = 1.0
 epsilon_f = 0.1
 epsilon_decay = 0.995
-batch_size = 64
+batch_size = 32
 memory = []
+
 def random_games(states,actions,rewards,next_states,dones):
     for episode in range(10): # One game is 1 episode. Play for 10 games
         state = env.reset()
@@ -102,7 +103,7 @@ def practice_game(states,actions,rewards,new_states,dones,model,epsilon,memory):
     #decay the epsilon
     if epsilon > epsilon_f:
         epsilon *= epsilon_decay
-    return memory_batch, epsilon
+    return epsilon
 
 
 # define function that recalls portions of the information from the practice
@@ -110,14 +111,62 @@ def practice_game(states,actions,rewards,new_states,dones,model,epsilon,memory):
 # applied and the targets calculated
 
 
-def experience_replay(memory_batch,model,train):
+def experience_replay(memory,model,train):
     gamma = 0.9 #decay factor gamma
-    
+    X = []
+    Y = []
+    states = []
+    targets = []
     #shuffle the batch of memories
-    memory_batch = np.array(random.sample(memory_batch.tolist(),len(memory_batch)//2))
-    
+    memory_batch = np.array(random.sample(memory,batch_size))
+    print("Length of memory batch: ", len(memory_batch))
+
+    #get and calculate current and next states and current and next q values
+
+    states = np.array([t[0] for t in memory_batch])
+    current_qs_list= model.predict(states) #gives the Q value for the policy network
+    new_states = np.array([t[3] for t in memory_batch])
+    future_qs_list = train.predict(new_states)
+
+    #memory is a list of tuples (state,action,reward,new_state,done)
+    for i,tuple in enumerate(memory_batch):
+        state = tuple[0]
+        action = tuple[1]
+        reward = tuple[2]
+        new_state = tuple[3]
+        done = tuple[4]
+        #print("done value", done)
+        if done:
+            new_q = -20 #Punish Losing
+        else:
+            new_q = reward + gamma*np.max(future_qs_list[i])
+
+        #update the q values on the current qs list
+        '''print("Inspecting action variable")
+        print(action)
+        print(np.array(action).shape)'''
+        current_qs = current_qs_list[i]
+        current_qs[action] = new_q
+        '''print("inspecting X and Y element shapes")
+        print(state.shape)
+        print(state[np.newaxis,...].shape)
+        print(current_qs.shape)
+        print(current_qs[np.newaxis,...].shape)'''
+        X.append(state[np.newaxis,...])
+        Y.append(current_qs[np.newaxis,...])
+    '''print("BEFORE inspecting X and Y shapes for fitting")
+    print(np.array(X).shape)
+    print(np.array(Y).shape)'''
+    X_np = np.array(X)
+    Y_np = np.array(Y)
+    X = np.squeeze(X_np)
+    Y = np.squeeze(Y_np)
+    '''print("AFTER inspecting X and Y shapes for fitting")
+    print(np.array(X).shape)
+    print(np.array(Y).shape)'''
+    model.fit(X,Y,epochs = 1)
     #extract the <s_o,a_o,r_1,s_1> from the memory batch into separate variables
-    state = memory_batch[:,0:4]
+    '''state = memory_batch[:,0:4]
     action = memory_batch[:,4]
     reward = memory_batch[:,5]
     new_state = memory_batch[:,6:-1]
@@ -133,9 +182,7 @@ def experience_replay(memory_batch,model,train):
             targets[i,np.argmax(targets[i])] = reward[i] + gamma*np.max(new_targets[i])
 
     #after acquiring targets, train the model
-    print("state shape for fitting ", state.shape)
-    print("targets shape for fitting ", targets.shape)
-    model.fit(state,targets,epochs = 3)
+    model.fit(state,targets,epochs = 3)'''
     return model
 
 # play one game that evaluates total score achieved. used to check
@@ -154,6 +201,9 @@ def evaluation_game(model):
             if done:
                 total_rewards.append(total_reward)
                 break
+    '''print(state.shape)
+    print(state[np.newaxis,...].shape)
+    print(model.predict(state[np.newaxis,...]).shape)'''
     return np.array(total_rewards).mean()
 
 
@@ -183,11 +233,12 @@ for episode in range(episodes):
     states,actions,rewards,new_states,dones = [],[],[],[],[]
 
     #play one practice game and acquire memory
-    memory_batch, epsilon = practice_game(states,actions,rewards,new_states,dones,main, epsilon, memory)
-
+    epsilon = practice_game(states,actions,rewards,new_states,dones,main, epsilon,memory)
+    
+    #print("Length of memory: ", len(memory))
     #learn from the memory and train the model
-    main = experience_replay(memory_batch,main,target)
-
+    main = experience_replay(memory,main,target)
+    #break #exit muna for debugging
     if i == 5:
         target.set_weights(main.get_weights())
         i = 0
@@ -195,7 +246,7 @@ for episode in range(episodes):
     #evaluate thhe performance of the model by getting the total score possible
 
     total = evaluation_game(main)
-    print("Average Total Score: {score} at Episode {episode}".format(score = total, episode = j+1))
+    print("Average Total Score: {score}, total memory size {total_memory} at Episode {episode}".format(score = total, total_memory = len(memory), episode = j+1))
 
     if total >= 195:
         main.save("cartpole_2.h5")

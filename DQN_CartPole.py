@@ -170,7 +170,6 @@ print("Before training, score is: ", evaluation_game(main))
 #Training proper
 
 episodes = 1000 #train for 1000 episodes
-
 i = 0 #counter for target update
 update_target_interval = 5 #we update the target network based on the main network weights every 5 episodes
 

@@ -56,13 +56,12 @@ same structure as random_games function but instead uses the model
 to decide the next action
 '''
 
-def practice_game(states,actions,rewards,new_states,dones,model,epsilon,memory):
-    while len(states) < batch_size: #play practice games until ideal batch_size is met
+def practice_game(model,epsilon,memory):
+    memory_initial_size = len(memory)
+    while int(len(memory) - memory_initial_size) < batch_size: #play practice games until ideal batch_size is met
         state = env.reset() #initiate cartpole environment
         done = False
-        while not done: # Maximium 500 time steps if the game is not lost
-            states.append(state) #get s_t
-
+        while not done: #finish one game
             #Use epsilon-greedy policy for selecting the action
             p = np.random.random()
             if p < epsilon: #event with probablity epsilon (initially 100%) (exploration)
@@ -70,19 +69,15 @@ def practice_game(states,actions,rewards,new_states,dones,model,epsilon,memory):
             else: #exploitation
                 action =  np.argmax(model.predict(state[np.newaxis,...]))
             
-            actions.append(action) #get a_t
+            
             new_state, reward, done, info = env.step(action)
-            dones.append(done) #get "if done"
-            new_states.append(new_state) #get s_t+1
-            rewards.append(reward) #get r_t+1
+            
             memory.append((state,action,reward,new_state,done))
             state = new_state
             if done:
                 #rewards[-1] = -50 #if lose: punish
                 break
-    print("epsilon: ", epsilon)
-    states,actions,rewards,new_states,dones = np.array(states),np.array(actions),np.array(rewards),np.array(new_states),np.array(dones)
-    memory_batch = np.concatenate((states,actions[...,np.newaxis],rewards[...,np.newaxis],new_states,dones[...,np.newaxis]),axis = 1)
+    #print("epsilon: ", epsilon)
 
     #decay the epsilon
     if epsilon > epsilon_f:
@@ -99,45 +94,54 @@ def practice_game(states,actions,rewards,new_states,dones,model,epsilon,memory):
 
 def experience_replay(memory,model,train):
     gamma = 0.9 #decay factor gamma
-    X = []
-    Y = []
-    states = []
-    targets = []
-    #shuffle the batch of memories
-    memory_batch = np.array(random.sample(memory,batch_size))
-    print("Length of memory batch: ", len(memory_batch))
+    X = [] #holds the inputs for training
+    Y = [] #holds the outputs for training
 
-    #get and calculate current and next states and current and next q values
+    #randomly sample a few data from the memory
+    memory_batch = np.array(random.sample(memory,batch_size))
+
+    '''
+    extract the states and newstates from the memory batch
+    then calculate the Q and Q' values based on the states
+    '''
 
     states = np.array([t[0] for t in memory_batch])
-    current_qs_list= model.predict(states) #gives the Q value for the policy network
+    current_qs_list= model.predict(states) #Q(s,a) value based on the main network
     new_states = np.array([t[3] for t in memory_batch])
-    future_qs_list = train.predict(new_states)
+    future_qs_list = train.predict(new_states)#Q(s',a) based on the target network
 
     #memory is a list of tuples (state,action,reward,new_state,done)
     for i,tuple in enumerate(memory_batch):
         state = tuple[0]
         action = tuple[1]
         reward = tuple[2]
-        new_state = tuple[3]
         done = tuple[4]
-        #print("done value", done)
+        
+        '''
+        Modified reward system:
+        The reward system of CartPole-v0 is always reward = 1 for every
+        action that the game is still ongoing. Even if the last action caused
+        the game to end, the reward is still 1. Thus, we want to impress
+        upon our agent that losing the game is bad, thus whenever the game is "done",
+        we assign a negatie q value for that action
+        '''
         if done:
             new_q = -20 #Punish Losing
         else:
-            new_q = reward + gamma*np.max(future_qs_list[i])
+            new_q = reward + gamma*np.max(future_qs_list[i]) #new q value based on the Bellman Optimality equation
 
         #update the q values on the current qs list
         current_qs = current_qs_list[i]
         current_qs[action] = new_q
+
         X.append(state[np.newaxis,...])
         Y.append(current_qs[np.newaxis,...])
 
-    X_np = np.array(X)
-    Y_np = np.array(Y)
-    X = np.squeeze(X_np)
-    Y = np.squeeze(Y_np)
-    model.fit(X,Y,epochs = 1)
+    #reshape the data to properly feed the model
+    X = np.squeeze(np.array(X))
+    Y = np.squeeze(np.array(Y))
+
+    model.fit(X,Y,epochs = 1) #train the model with the updated Q values from the memory batch
     return model
 
 '''
@@ -198,10 +202,9 @@ update_target_interval = 5 #we update the target network based on the main netwo
 
 for episode in range(episodes):
     #initate variables
-    states,actions,rewards,new_states,dones = [],[],[],[],[]
 
     #play one practice game and acquire memory
-    epsilon = practice_game(states,actions,rewards,new_states,dones,main, epsilon,memory)
+    epsilon = practice_game(main, epsilon,memory)
     
     #print("Length of memory: ", len(memory))
     #learn from the memory and train the model
@@ -214,7 +217,7 @@ for episode in range(episodes):
     #evaluate the performance of the model by getting the total score possible
 
     total = evaluation_game(main)
-    print("Average Total Score: {score}, total memory size {total_memory} at Episode {episode}".format(score = total, total_memory = len(memory), episode = episode+1))
+    print("Average Total Score: {score}, total memory size: {total_memory}, epsilon: {epsilon}  at Episode {episode}".format(score = total, total_memory = len(memory), epsilon = epsilon, episode = episode+1))
 
 
     '''
@@ -224,7 +227,7 @@ for episode in range(episodes):
     '''
 
     if total >= 195:
-        main.save("cartpole_2.h5")
+        main.save("cartpole_model.h5")
         print("Model achieved goal score of >= 195")
         print("Saving model. Exiting training")
         break
